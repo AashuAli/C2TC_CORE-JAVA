@@ -1,0 +1,336 @@
+# USAGE
+# python detect_drowsiness.py --shape-predictor shape_predictor_68_face_landmarks.dat
+# python detect_drowsiness.py --shape-predictor shape_predictor_68_face_landmarks.dat --alarm alarm.wav
+
+# import the necessary packages
+from scipy.spatial import distance as dist
+from imutils.video import VideoStream
+from imutils import face_utils
+from threading import Thread
+import numpy as np
+import argparse
+import imutils
+import time
+import dlib
+import cv2
+import RPi.GPIO as GPIO
+import time
+import smtplib 
+from email.mime.multipart import MIMEMultipart 
+from email.mime.text import MIMEText 
+from email.mime.base import MIMEBase 
+from email import encoders
+import serial 
+
+GPIO.setmode(GPIO.BCM)
+alcohol=18
+buzzer=23
+light=24
+motor=25
+water=17
+
+GPIO.setup(alcohol, GPIO.IN)
+GPIO.setup(buzzer, GPIO.OUT)
+GPIO.setup(light, GPIO.OUT)
+GPIO.setup(motor, GPIO.OUT)
+GPIO.setup(water, GPIO.OUT)
+GPIO.output(motor,GPIO.HIGH)
+GPIO.output(water,GPIO.HIGH)
+GPIO.output(buzzer,GPIO.LOW)
+GPIO.output(light,GPIO.LOW)
+
+
+def convert_to_degrees(raw_value):
+    decimal_value = raw_value/100.00
+    degrees = int(decimal_value)
+    mm_mmmm = (decimal_value -int(decimal_value))/0.6
+    position = degrees + mm_mmmm
+    position = "%.4f" %(position)
+    return position
+
+# def gps():
+#     ser = serial.Serial ("/dev/ttyAMA0")
+#     gpgga_info = "$GPGGA,"
+#     GPGGA_buffer = 0
+#     NMEA_buff = 0
+#     received_data = (str)(ser.readline()) #read NMEA string received
+#     GPGGA_data_available = received_data.find(gpgga_info)   #check for NMEA GPGGA string                
+#     if (GPGGA_data_available>0):
+#         GPGGA_buffer = received_data.split("$GPGGA,",1)[1]  #store data coming after “$GPGGA,” string
+#         NMEA_buff = (GPGGA_buffer.split(','))
+#         nmea_time = []
+#         nmea_latitude = []
+#         nmea_longitude = []
+#         nmea_time = NMEA_buff[0]                    #extract time from GPGGA string
+#         nmea_latitude = NMEA_buff[1]                #extract latitude from GPGGA string
+#         nmea_longitude = NMEA_buff[3]               #extract longitude from GPGGA string
+#         print("NMEA Time: ", nmea_time,'\n')
+#         lat = (float)(nmea_latitude)
+#         lat = convert_to_degrees(lat)
+#         longi = (float)(nmea_longitude)
+#         longi = convert_to_degrees(longi)
+#         print ("NMEA Latitude:", lat,"NMEA Longitude:", longi,'\n') 
+#         return lat,longi
+
+
+def eye_aspect_ratio(eye):
+    # compute the euclidean distances between the two sets of
+    # vertical eye landmarks (x, y)-coordinates
+    A = dist.euclidean(eye[1], eye[5])
+    B = dist.euclidean(eye[2], eye[4])
+
+    # compute the euclidean distance between the horizontal
+    # eye landmark (x, y)-coordinates
+    C = dist.euclidean(eye[0], eye[3])
+
+    # compute the eye aspect ratio
+    ear = (A + B) / (2.0 * C)
+
+    # return the eye aspect ratio
+    return ear
+ 
+
+path_alarm="/home/pi/Desktop/drowsiness/alarm.wav"
+path_fl="/home/pi/Desktop/drowsiness/shape_predictor_68_face_landmarks.dat" 
+# define two constants, one for the eye aspect ratio to indicate
+# blink and then a second constant for the number of consecutive
+# frames the eye must be below the threshold for to set off the
+# alarm
+EYE_AR_THRESH = 0.20
+EYE_AR_CONSEC_FRAMES = 5
+
+# initialize the frame counter as well as a boolean used to
+# indicate if the alarm is going off
+COUNTER = 0
+
+
+# initialize dlib's face detector (HOG-based) and then create
+# the facial landmark predictor
+print("[INFO] loading facial landmark predictor...")
+detector = dlib.get_frontal_face_detector()
+predictor = dlib.shape_predictor(path_fl)
+
+# grab the indexes of the facial landmarks for the left and
+# right eye, respectively
+(lStart, lEnd) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
+(rStart, rEnd) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
+
+# start the video stream thread
+print("[INFO] starting video stream thread...")
+vid  = cv2.VideoCapture(0)
+#vs=VideoStream(0).start()
+
+from time import sleep
+time.sleep(1.0)
+
+path="/home/pi/Desktop/drowsiness/img.jpg"
+#GPIO.setmode(GPIO.BCM)
+#GPIO.setwarnings(False)
+
+drowsecount = 0
+#camera.start_preview()
+# loop over frames from the video stream
+def sendmail():
+    fromaddr = "samarthhegde420@gmail.com"     #https://www.google.com/settings/security/lesssecureapps
+    toaddr = "kalleshi.tj94@gmail.com"
+       
+# instance of MIMEMultipart 
+    msg = MIMEMultipart() 
+# storing the senders email address   
+    msg['From'] = fromaddr 
+  
+# storing the receivers email address  
+    msg['To'] = toaddr 
+  
+    #lat,long = gps()
+# storing the subject  
+    msg['Subject'] = "Alert!!..This person is sleepy while Driving!! "     
+    # string to store the body of the mail 
+    body = "Drowsiness detected Location:12.909451105481356, 77.5661474014095"
+    
+    
+    #body += "Located at:"+"http://www.google.com/maps/place/"+str(lat)+","+str(long)
+    print(body)
+   
+    # attach the body with the msg instance 
+    msg.attach(MIMEText(body, 'plain')) 
+    
+    # open the file to be sent  
+    
+    attachment = open(path, "rb") 
+    
+    # instance of MIMEBase and named as p 
+    p = MIMEBase('application', 'octet-stream') 
+  
+# To change the payload into encoded form 
+    p.set_payload((attachment).read()) 
+    
+    # encode into base64 
+    encoders.encode_base64(p) 
+         
+    # attach the instance 'p' to instance 'msg'
+    
+    p.add_header('Content-Disposition', "attachment; filename= %s" % path)
+    msg.attach(p) 
+    
+    # creates SMTP session 
+    s = smtplib.SMTP('smtp.gmail.com', 587)
+    print("smtp",s)
+        
+    # start TLS for security 
+    s.starttls() 
+    
+    # Authentication 
+    s.login(fromaddr,"samarth15121998") 
+    
+    # Converts the Multipart msg into a string 
+    text = msg.as_string()
+    print("text",text)
+    
+    # sending the mail 
+    s.sendmail(fromaddr, toaddr, text) 
+  
+# terminating the session 
+    s.quit()
+#val=firebase.get("","mode")
+
+while True:
+    time.sleep(1)
+    input_value = GPIO.input(alcohol)
+    print("alcohol",input_value)
+    print("Checking alcohol")
+    if(input_value==1):    #person not consumed alcohol when its=1
+        print("starting vehicle")
+        GPIO.output(motor,GPIO.LOW)
+        break
+    
+    else:
+        print("Alcohol detected cannot start the bike")
+        
+       
+while True:
+    # grab the frame from the threaded video file stream, resize
+    # it, and convert it to grayscale
+    # channels)
+    ret, frame = vid.read()
+    
+    #camera.capture(path)
+    #frame = cv2.imread(path)
+    #print(frame)
+    frame = imutils.resize(frame, width=450)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # detect faces in the grayscale frame
+    rects = detector(gray, 0)
+
+    # loop over the face detections
+    for rect in rects:
+        # determine the facial landmarks for the face region, then
+        # convert the facial landmark (x, y)-coordinates to a NumPy
+        # array
+        shape = predictor(gray, rect)
+        shape = face_utils.shape_to_np(shape)
+
+        # extract the left and right eye coordinates, then use the
+        # coordinates to compute the eye aspect ratio for both eyes
+        leftEye = shape[lStart:lEnd]
+        rightEye = shape[rStart:rEnd]
+        leftEAR = eye_aspect_ratio(leftEye)
+        rightEAR = eye_aspect_ratio(rightEye)
+
+        # average the eye aspect ratio together for both eyes
+        ear = (leftEAR + rightEAR) / 2.0
+
+        # compute the convex hull for the left and right eye, then
+        # visualize each of the eyes
+        leftEyeHull = cv2.convexHull(leftEye)
+        rightEyeHull = cv2.convexHull(rightEye)
+        cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1)
+        cv2.drawContours(frame, [rightEyeHull], -1, (0, 255, 0), 1)
+
+        # check to see if the eye aspect ratio is below the blink
+        # threshold, and if so, increment the blink frame counter
+        if ear < EYE_AR_THRESH:
+            COUNTER += 1
+
+            # if the eyes were closed for a sufficient number of
+            # then sound the alarm
+            if COUNTER >= EYE_AR_CONSEC_FRAMES:
+                drowsecount +=1
+                cv2.putText(frame, "ConsicutiveFrame:\n"+str(drowsecount), (100, 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)  
+                cv2.putText(frame, "DROWSINESS ALERT!", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                print("buzzer on")
+                print(drowsecount)
+                
+                GPIO.output(buzzer,GPIO.HIGH)
+                time.sleep(2)
+                GPIO.output(buzzer,GPIO.LOW)
+                
+                
+            if(drowsecount>3 and drowsecount<5):
+                print("Water pump is on")
+                
+                GPIO.output(water,GPIO.LOW)
+                time.sleep(2)
+                GPIO.output(water,GPIO.LOW)
+
+                
+            if(drowsecount==5):
+                
+                print("Ignition is OFF and light on")
+                GPIO.output(light,GPIO.LOW)
+                time.sleep(1)
+                GPIO.output(light,GPIO.HIGH)
+                time.sleep(1)
+                GPIO.output(light,GPIO.LOW)
+                time.sleep(1)
+                GPIO.output(light,GPIO.HIGH)
+                GPIO.output(motor,GPIO.HIGH)
+                GPIO.output(buzzer,GPIO.LOW)
+                GPIO.output(water,GPIO.HIGH)
+                GPIO.output(motor,GPIO.HIGH)
+                cv2.imwrite(path,frame)
+                
+                sendmail()
+                counter=0
+                drowsecount=0
+                break
+                                
+
+        # otherwise, the eye aspect ratio is not below the blink
+        # threshold, so reset the counter and alarm
+        else:
+            COUNTER = 0
+            drowsecount=0
+            print("Water pump off")
+            print(drowsecount)
+            
+
+        # draw the computed eye aspect ratio on the frame to help
+        # with debugging and setting the correct eye aspect ratio
+        # thresholds and frame counters
+        cv2.putText(frame, "EYE: {:.2f}".format(ear), (300, 30),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+ 
+    # show the frame
+    cv2.imshow("Frame", frame)
+    key = cv2.waitKey(1) & 0xFF
+ 
+    # if the `q` key was pressed, break from the loop
+    if key == ord("q"):
+        break
+
+
+# do a bit of cleanup
+cv2.destroyAllWindows()
+#vs.stop()
+
+
+
+
+
+
+
+
